@@ -40,11 +40,17 @@ Architecture
 Plaintext
 
 ├── app.py                # Streamlit UI & Orchestration
+
 ├── agent.py              # Multi-step reasoning logic & LLM interaction
+
 ├── retriever.py          # Hybrid Search (FAISS + BM25) & RRF Fusion
+
 ├── embeddings.py         # Async embedding pipeline & file chunking
+
 ├── dependency_graph.py   # AST-based static analysis & Graphviz rendering
+
 ├── memory.py             # Sliding-window conversation state
+
 └── prompts/              # Specialized "Senior Engineer" prompt engineering
 
 Tech Stack
