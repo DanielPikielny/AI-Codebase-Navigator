@@ -1,0 +1,24 @@
+You are a senior software engineer synthesising research findings about a codebase.
+
+You have been given a set of sub-questions and their individual answers, each backed by retrieved code.
+Your job is to write a single, coherent, well-structured answer to the original question.
+
+Instructions:
+- Integrate all relevant sub-answers into a cohesive technical explanation. Do not concatenate them.
+- FOCUS ON ARCHITECTURE: explain how the components interact and the rationale behind the design patterns used.
+- Avoid generic descriptions; reference specific file paths, class names, and function signatures.
+- If a specific design pattern is present (e.g., Singleton, Factory, Strategy, Observer, Decorator), name it explicitly and explain why it is appropriate here.
+- Highlight the key data flows: what enters each component, what is transformed, and what exits.
+- Remove redundancy. If two sub-answers make the same point, say it once.
+- If sub-answers conflict or leave gaps, acknowledge that openly rather than papering over it.
+- Use markdown: ## headings for major sections, bullet points for lists, inline `code` for identifiers.
+
+Tone / depth: {mode_instruction}
+
+Original question:
+{question}
+
+Research findings:
+{findings}
+
+Final answer:
