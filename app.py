@@ -1,31 +1,11 @@
-"""
-app_v4.py
----------
-Codebase Navigator — v4
-
-New in v4
-  ① Hybrid search     : FAISS (semantic) + BM25 (keyword), fused via RRF
-                        Toggle between hybrid / semantic-only in the sidebar
-  ③ Conversation memory: chat-like Q&A with follow-up awareness, history
-                        display, and memory-augmented prompts
-
-All v3 features retained:
-  multi-step agent reasoning, dependency graph, "locate feature",
-  refactor suggestions, test generation, file explainer, repo summary,
-  GitHub URL input, disk index cache, multi-language, explanation modes
-"""
-
 from __future__ import annotations
-
 import os
 import re
 import shutil
 import tempfile
 from pathlib import Path
-
 import streamlit as st
 from openai import OpenAI
-
 from embeddings import SUPPORTED_EXTENSIONS, create_chunks, embed_chunks, embed_text
 from retriever import CodeRetriever
 from agent import (
@@ -46,7 +26,6 @@ st.set_page_config(
     page_icon="🧭",
     layout="wide",
 )
-
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=DM+Sans:wght@400;500;600&display=swap');
@@ -162,7 +141,6 @@ def _load_files(repo_path: str) -> list[str]:
             if os.path.splitext(f)[1].lower() in EXTENSIONS:
                 files.append(os.path.join(root, f))
     return files
-
 def _load_qa_prompt() -> str:
     return (Path("prompts") / "qa_prompt.txt").read_text(encoding="utf-8")
 
@@ -267,7 +245,7 @@ with st.sidebar:
         st.caption(f"Active: `{st.session_state.source_label}`")
 
     if st.session_state.clone_dir:
-        if st.button("Remove cloned repo", use_container_width=True):
+        if st.button("🗑 Remove cloned repo", use_container_width=True):
             shutil.rmtree(st.session_state.clone_dir, ignore_errors=True)
             for k in ("clone_dir", "repo_path"):
                 st.session_state[k] = None
@@ -275,7 +253,6 @@ with st.sidebar:
             st.rerun()
 
 st.title("Codebase Navigator")
-
 repo_path = st.session_state.repo_path
 if not repo_path:
     st.info("Load a repository from the sidebar to get started.")
@@ -301,9 +278,9 @@ tab_chat, tab_locate, tab_graph, tab_actions, tab_summary = st.tabs([
     "Repo summary",
 ])
 
+
 with tab_chat:
     memory = ChatMemory.from_session(st.session_state, max_turns=6)
-
     col_agent, col_clear = st.columns([4, 1])
     with col_agent:
         use_agent = st.toggle(
@@ -319,12 +296,15 @@ with tab_chat:
             st.rerun()
     memory.render_history(st)
     query = st.chat_input("Ask a question about the codebase…")
+
     if query:
         with st.chat_message("user"):
             st.markdown(query)
         memory_context = memory.as_context()
+
         with st.chat_message("assistant"):
             status = st.empty()
+
             if use_agent:
                 augmented_template = qa_template
                 if memory_context:
@@ -341,6 +321,7 @@ with tab_chat:
                     mode_instruction = mode_instr,
                     qa_template      = augmented_template,
                     progress_fn      = lambda m: status.info(m),
+                    retrieve_fn      = lambda q, k: _retrieve(q, k),
                 )
                 status.empty()
 
@@ -377,12 +358,14 @@ with tab_chat:
                 sources = results
                 status.empty()
                 st.markdown(answer)
+
             if sources:
                 with st.expander(f"Sources ({len(sources)})"):
                     for s in sources:
                         _render_snippet(s, query)
         memory.add(query, answer, sources)
         memory.to_session(st.session_state)
+
 
 with tab_locate:
     st.subheader("Where is X implemented?")
@@ -397,8 +380,31 @@ with tab_locate:
     )
     if locate_q:
         with st.spinner("Ranking candidates…"):
-            loc = locate_feature(retriever, locate_q, mode_instr, k=8)
-        st.markdown(loc.answer)
+            loc = locate_feature(
+                retriever        = retriever,
+                query            = locate_q,
+                mode_instruction = mode_instr,
+                k                = 8,
+                retrieve_fn      = lambda q, k: _retrieve(q, k),
+            )
+
+        from agent import Confidence
+        if loc.confidence == Confidence.LOW:
+            st.warning(
+                "**Low confidence** — the search did not find a strong match. "
+                "The result below is speculative.\n\n"
+                "**Try refining your query** with a more specific function name, "
+                "class name, or filename.",
+            )
+            with st.expander("Show low-confidence result anyway"):
+                st.markdown(loc.answer)
+        elif loc.confidence == Confidence.MEDIUM:
+            st.info("**Medium confidence** — partial match found.")
+            st.markdown(loc.answer)
+        else:
+            st.success("**High confidence** match found.")
+            st.markdown(loc.answer)
+
         with st.expander("All candidate snippets"):
             for s in loc.sources:
                 _render_snippet(s, locate_q)

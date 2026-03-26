@@ -5,8 +5,9 @@ Your job is to:
 1. Rank the candidates from most to least likely to contain the implementation.
 2. For each candidate, briefly explain WHY it is or isn't relevant.
 3. Identify the single most likely file and function/class.
+4. Assign a confidence level based on the evidence quality.
 
-Output format (strict markdown):
+Output format (strict markdown — follow exactly, the system parses the Confidence line):
 
 ## Most likely location
 `<file path>` — `<function or class name>`
@@ -18,7 +19,13 @@ Output format (strict markdown):
 ... (include all candidates)
 
 ## Confidence
-<High / Medium / Low> — <one sentence explaining your confidence level>
+CONFIDENCE:<High|Medium|Low> — <one sentence explaining your confidence level>
+
+Rules for confidence:
+- High   : at least one snippet clearly implements the feature (function/class body present)
+- Medium : snippets are related but only partially show the implementation
+- Low    : snippets are only weakly related; the feature may not be indexed or may use
+           different terminology than the query
 
 Tone / depth: {mode_instruction}
 

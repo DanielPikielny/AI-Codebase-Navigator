@@ -5,11 +5,11 @@ import logging
 import os
 import pickle
 import re
+import tempfile
 import warnings
 from collections import defaultdict
 import faiss
 import numpy as np
-
 logger = logging.getLogger(__name__)
 
 try:
@@ -24,13 +24,7 @@ except ImportError:
 
 INDEX_CACHE_ROOT = ".index_cache"
 _SPLIT_RE = re.compile(r"[^a-zA-Z0-9_]+")
-
 def _tokenise(text: str) -> list:
-    """
-    Lowercase, split on non-alphanumeric/underscore boundaries.
-    Underscore-joined identifiers are kept whole AND split on underscore,
-    so 'embed_text' matches both 'embed' and 'text'.
-    """
     raw    = _SPLIT_RE.split(text.lower())
     tokens = []
     for tok in raw:
@@ -42,11 +36,6 @@ def _tokenise(text: str) -> list:
     return tokens
 
 def _rrf(rankings: list, k: int = 60) -> list:
-    """
-    Combine ranked lists of chunk indices using RRF.
-    Returns [(chunk_idx, rrf_score)] sorted descending.
-    k=60 is the standard constant from the original RRF paper.
-    """
     scores = defaultdict(float)
     for ranking in rankings:
         for rank, idx in enumerate(ranking, start=1):
@@ -70,14 +59,9 @@ class CodeRetriever:
             self._bm25 = BM25Okapi(corpus)
 
     def _ensure_bm25(self) -> bool:
-        """
-        Ensure BM25 index exists. Returns True if usable, False otherwise.
-        FIX-⑩: returns False (with a warning) instead of raising ImportError.
-        """
         if not HAS_BM25:
             warnings.warn(
-                "rank-bm25 is not installed; keyword search is unavailable. "
-                "Hybrid search is using semantic-only results. "
+                "rank-bm25 is not installed; keyword search unavailable. "
                 "Run: pip install rank-bm25",
                 RuntimeWarning,
                 stacklevel=3,
@@ -86,12 +70,10 @@ class CodeRetriever:
         if self._bm25 is None:
             if not self.metadata:
                 return False
-            corpus     = [_tokenise(c["text"]) for c in self.metadata]
-            self._bm25 = BM25Okapi(corpus)
+            self._bm25 = BM25Okapi([_tokenise(c["text"]) for c in self.metadata])
         return True
 
     def semantic_search(self, query_embedding: list, k: int = 10) -> list:
-        """Return [(chunk_idx, l2_distance)] from FAISS."""
         if not self.metadata:
             return []
         q = np.array([query_embedding], dtype="float32")
@@ -99,10 +81,6 @@ class CodeRetriever:
         return [(int(i), float(d)) for d, i in zip(dists[0], idxs[0]) if i >= 0]
 
     def keyword_search(self, query: str, k: int = 10) -> list:
-        """
-        Return [(chunk_idx, bm25_score)] sorted descending.
-        Returns [] if BM25 is unavailable (FIX-⑩).
-        """
         if not self._ensure_bm25():
             return []
         tokens = _tokenise(query)
@@ -119,14 +97,12 @@ class CodeRetriever:
         k:       int = 5,
         fetch_k: int = 20,
     ) -> list:
-        """
-        Fuse semantic and keyword rankings with RRF, return top-k enriched chunks.
-        Falls back to semantic-only (with a warning) if BM25 is unavailable.
-        """
         sem_hits = self.semantic_search(query_embedding, k=fetch_k)
         kw_hits  = self.keyword_search(query, k=fetch_k)
+
         sem_ranking = [idx for idx, _ in sem_hits]
         kw_ranking  = [idx for idx, _ in kw_hits]
+
         if kw_ranking:
             fused = _rrf([sem_ranking, kw_ranking])[:k]
         else:
@@ -152,7 +128,7 @@ class CodeRetriever:
         return results
 
     def search(self, query_embedding: list, k: int = 5) -> list:
-        """Semantic-only search — kept for backward compatibility."""
+        """Semantic-only — kept for backward compatibility."""
         return [
             {
                 **dict(self.metadata[idx]),
@@ -165,10 +141,35 @@ class CodeRetriever:
         ]
 
     def save(self, path: str) -> None:
+        """
+        FIX-A: Write to a temporary directory inside the same parent, then do
+        an atomic rename.  A crash mid-write leaves the temp dir behind but
+        never corrupts the live index, so build_or_load will simply rebuild.
+        """
         os.makedirs(path, exist_ok=True)
-        faiss.write_index(self.index, os.path.join(path, "index.faiss"))
-        with open(os.path.join(path, "metadata.pkl"), "wb") as f:
-            pickle.dump({"metadata": self.metadata, "dimension": self.dimension}, f)
+        parent  = os.path.dirname(os.path.abspath(path))
+        tmp_dir = tempfile.mkdtemp(dir=parent, prefix=".tmp_index_")
+
+        try:
+            faiss.write_index(
+                self.index,
+                os.path.join(tmp_dir, "index.faiss"),
+            )
+            with open(os.path.join(tmp_dir, "metadata.pkl"), "wb") as f:
+                pickle.dump(
+                    {"metadata": self.metadata, "dimension": self.dimension}, f
+                )
+
+            if os.path.isdir(path):
+                import shutil
+                shutil.rmtree(path)
+
+            os.replace(tmp_dir, path)
+
+        except Exception:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
 
     @classmethod
     def load(cls, path: str) -> "CodeRetriever":
@@ -184,19 +185,14 @@ class CodeRetriever:
 
     @staticmethod
     def _repo_fingerprint(repo_path: str, extensions: set) -> str:
-        """
-        FIX-④: fingerprint now includes CHUNK_SIZE and EMBED_MODEL so that
-        changing chunking config or switching embedding models forces a rebuild.
-        """
-        from embeddings import CHUNK_SIZE, EMBED_MODEL
-
+        from embeddings import CHUNK_SIZE, EMBED_MODEL   # FIX-④
         skip = {
             "__pycache__", "node_modules", ".venv", "venv",
             "dist", "build", ".next", "target",
         }
         sig = [
             f"chunk_size:{CHUNK_SIZE}",
-            f"embed_model:{EMBED_MODEL}",
+            f"embed_model:{EMBED_MODEL}", 
         ]
         for root, dirs, files in os.walk(repo_path):
             dirs[:] = sorted(
@@ -248,7 +244,7 @@ class CodeRetriever:
         obj.add(embeddings, chunks)
 
         _log("Saving index to disk…")
-        obj.save(cache_dir)
+        obj.save(cache_dir)   # FIX-A: atomic write
 
         _log("Index ready.")
         return obj
